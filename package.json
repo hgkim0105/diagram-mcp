@@ -1,0 +1,25 @@
+{
+  "name": "diagram-mcp",
+  "version": "1.0.0",
+  "description": "AI 에이전트용 다이어그램 생성 MCP 서버 - Mermaid, PlantUML, Graphviz, SVG 차트 지원",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "diagram-mcp": "dist/index.js"
+  },
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --platform=node --target=node18 --format=esm --outfile=dist/index.js --banner:js='#!/usr/bin/env node'",
+    "dev": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "esbuild": "^0.25.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.0.0"
+  }
+}
