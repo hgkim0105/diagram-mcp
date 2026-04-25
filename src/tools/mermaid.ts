@@ -1,11 +1,24 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { renderViaKroki, getPngUrl } from "../lib/kroki.js";
 
 // ── 헬퍼 함수 ─────────────────────────────────────────────────────────────────
 
 function wrap(syntax: string): string {
   return `\`\`\`mermaid\n${syntax.trim()}\n\`\`\``;
 }
+
+async function toOutput(syntax: string, format: string): Promise<string> {
+  if (format === "svg") return renderViaKroki("mermaid", syntax);
+  if (format === "png_url") return getPngUrl("mermaid", syntax);
+  return wrap(syntax);
+}
+
+const OutputFormat = z
+  .enum(["markdown", "svg", "png_url"])
+  .optional()
+  .default("markdown")
+  .describe("출력 포맷. markdown=마크다운 코드블록(기본), svg=SVG (HTML/PDF용), png_url=PNG 이미지 URL (Slack/Discord용)");
 
 function escapeLabel(label: string): string {
   return label.replace(/"/g, "&quot;").replace(/[[\]{}()]/g, (c) => `&#${c.charCodeAt(0)};`);
@@ -189,8 +202,9 @@ export function registerMermaidTools(server: McpServer): void {
         .optional()
         .describe("흐름 방향. TD=위→아래(기본), LR=왼→오른, BT=아래→위, RL=오른→왼"),
       title: z.string().optional().describe("다이어그램 제목"),
+      output_format: OutputFormat,
     },
-    async ({ nodes, edges, direction = "TD", title }) => {
+    async ({ nodes, edges, direction = "TD", title, output_format = "markdown" }) => {
       const lines: string[] = [`flowchart ${direction}`];
       if (title) lines.push(`  ---\n  title: ${title}\n  ---`);
 
@@ -201,7 +215,7 @@ export function registerMermaidTools(server: McpServer): void {
         lines.push(`  ${e.from} ${edgeArrow(e.label, e.style)} ${e.to}`);
       }
 
-      return { content: [{ type: "text" as const, text: wrap(lines.join("\n")) }] };
+      return { content: [{ type: "text" as const, text: await toOutput(lines.join("\n"), output_format) }] };
     }
   );
 
@@ -215,8 +229,9 @@ export function registerMermaidTools(server: McpServer): void {
       participants: z.array(z.string()).describe("참여자 이름 목록 (표시 순서대로)"),
       messages: z.array(SeqMessage).describe("메시지 목록"),
       title: z.string().optional().describe("다이어그램 제목"),
+      output_format: OutputFormat,
     },
-    async ({ participants, messages, title }) => {
+    async ({ participants, messages, title, output_format = "markdown" }) => {
       const lines: string[] = ["sequenceDiagram"];
       if (title) lines.push(`  title ${title}`);
       for (const p of participants) lines.push(`  participant ${p}`);
@@ -224,7 +239,7 @@ export function registerMermaidTools(server: McpServer): void {
         lines.push(`  ${m.from}${msgArrow(m.type)}${m.to}: ${m.text}`);
       }
 
-      return { content: [{ type: "text" as const, text: wrap(lines.join("\n")) }] };
+      return { content: [{ type: "text" as const, text: await toOutput(lines.join("\n"), output_format) }] };
     }
   );
 
@@ -238,8 +253,9 @@ export function registerMermaidTools(server: McpServer): void {
     {
       classes: z.array(ClassDef).describe("클래스 목록"),
       relationships: z.array(ClassRel).describe("관계 목록"),
+      output_format: OutputFormat,
     },
-    async ({ classes, relationships }) => {
+    async ({ classes, relationships, output_format = "markdown" }) => {
       const lines: string[] = ["classDiagram"];
       for (const c of classes) {
         lines.push(`  class ${c.name} {`);
@@ -253,7 +269,7 @@ export function registerMermaidTools(server: McpServer): void {
         lines.push(`  ${r.from} ${arrow} ${r.to}${lbl}`);
       }
 
-      return { content: [{ type: "text" as const, text: wrap(lines.join("\n")) }] };
+      return { content: [{ type: "text" as const, text: await toOutput(lines.join("\n"), output_format) }] };
     }
   );
 
@@ -267,8 +283,9 @@ export function registerMermaidTools(server: McpServer): void {
     {
       entities: z.array(EREntity).describe("엔티티 목록"),
       relationships: z.array(ERRel).describe("관계 목록"),
+      output_format: OutputFormat,
     },
-    async ({ entities, relationships }) => {
+    async ({ entities, relationships, output_format = "markdown" }) => {
       const lines: string[] = ["erDiagram"];
       for (const r of relationships) {
         const fc = r.from_card ?? "||";
@@ -285,7 +302,7 @@ export function registerMermaidTools(server: McpServer): void {
         lines.push("  }");
       }
 
-      return { content: [{ type: "text" as const, text: wrap(lines.join("\n")) }] };
+      return { content: [{ type: "text" as const, text: await toOutput(lines.join("\n"), output_format) }] };
     }
   );
 
@@ -307,8 +324,9 @@ export function registerMermaidTools(server: McpServer): void {
         )
         .describe("섹션 목록"),
       date_format: z.string().optional().describe("날짜 형식. 기본값 YYYY-MM-DD"),
+      output_format: OutputFormat,
     },
-    async ({ title, sections, date_format = "YYYY-MM-DD" }) => {
+    async ({ title, sections, date_format = "YYYY-MM-DD", output_format = "markdown" }) => {
       const lines: string[] = ["gantt", `  title ${title}`, `  dateFormat ${date_format}`];
       for (const sec of sections) {
         lines.push(`  section ${sec.name}`);
@@ -321,7 +339,7 @@ export function registerMermaidTools(server: McpServer): void {
         }
       }
 
-      return { content: [{ type: "text" as const, text: wrap(lines.join("\n")) }] };
+      return { content: [{ type: "text" as const, text: await toOutput(lines.join("\n"), output_format) }] };
     }
   );
 
@@ -341,14 +359,15 @@ export function registerMermaidTools(server: McpServer): void {
           })
         )
         .describe("슬라이스 목록"),
+      output_format: OutputFormat,
     },
-    async ({ title, slices }) => {
+    async ({ title, slices, output_format = "markdown" }) => {
       const lines: string[] = [`pie title ${title}`];
       for (const s of slices) {
         lines.push(`  "${s.label}" : ${s.value}`);
       }
 
-      return { content: [{ type: "text" as const, text: wrap(lines.join("\n")) }] };
+      return { content: [{ type: "text" as const, text: await toOutput(lines.join("\n"), output_format) }] };
     }
   );
 
@@ -366,15 +385,16 @@ export function registerMermaidTools(server: McpServer): void {
         .optional()
         .describe("루트 노드 모양. 기본값 circle"),
       children: z.array(MindmapNodeSchema).describe("1단계 하위 노드 목록 (재귀 중첩 가능)"),
+      output_format: OutputFormat,
     },
-    async ({ root, root_shape = "circle", children }) => {
+    async ({ root, root_shape = "circle", children, output_format = "markdown" }) => {
       const rootNode = nodeForMindmap(root, root_shape);
       const lines: string[] = ["mindmap", `  ${rootNode}`];
       if (children.length > 0) {
         lines.push(mindmapLines(children, 2));
       }
 
-      return { content: [{ type: "text" as const, text: wrap(lines.join("\n")) }] };
+      return { content: [{ type: "text" as const, text: await toOutput(lines.join("\n"), output_format) }] };
     }
   );
 }

@@ -21013,7 +21013,46 @@ var EMPTY_COMPLETION_RESULT = {
   }
 };
 
+// src/lib/kroki.ts
+var DEFAULT_BASE = "https://kroki.io";
+var TIMEOUT_MS = 1e4;
+async function renderViaKroki(diagramType, source) {
+  const base = process.env["KROKI_BASE_URL"] ?? DEFAULT_BASE;
+  const url = `${base}/${diagramType}/svg`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  let response;
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
+      body: source,
+      signal: controller.signal
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`Kroki \uC11C\uBC84 \uC5F0\uACB0 \uC2E4\uD328 (${url}): ${msg}`);
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(`Kroki \uB80C\uB354\uB9C1 \uC2E4\uD328 [HTTP ${response.status}]: ${body.slice(0, 200)}`);
+  }
+  const svg = await response.text();
+  if (!svg.includes("<svg")) {
+    throw new Error("Kroki \uC751\uB2F5\uC774 \uC62C\uBC14\uB978 SVG\uAC00 \uC544\uB2D9\uB2C8\uB2E4.");
+  }
+  return svg;
+}
+
 // src/tools/utility.ts
+var KROKI_TYPES = {
+  mermaid: "mermaid",
+  plantuml: "plantuml",
+  dot: "graphviz",
+  graphviz: "graphviz"
+};
 var SUPPORTED_TYPES = [
   {
     name: "Mermaid Flowchart",
@@ -21131,14 +21170,26 @@ var SUPPORTED_TYPES = [
 function registerUtilityTools(server2) {
   server2.tool(
     "render_diagram",
-    "\uC774\uBBF8 \uC791\uC131\uB41C \uB2E4\uC774\uC5B4\uADF8\uB7A8 \uBB38\uBC95\uC744 \uB9C8\uD06C\uB2E4\uC6B4 \uCF54\uB4DC\uBE14\uB85D\uC73C\uB85C \uD3EC\uB9E4\uD305\uD569\uB2C8\uB2E4. Mermaid, PlantUML, Graphviz DOT \uB4F1 \uC9C1\uC811 \uC791\uC131\uD55C \uBB38\uBC95\uC774 \uC788\uC744 \uB54C \uC0AC\uC6A9\uD558\uC138\uC694. diagram_type: mermaid | plantuml | dot | d2 | \uAE30\uD0C0 \uC5B8\uC5B4 \uC2DD\uBCC4\uC790",
+    "\uC774\uBBF8 \uC791\uC131\uB41C \uB2E4\uC774\uC5B4\uADF8\uB7A8 \uBB38\uBC95\uC744 \uD3EC\uB9E4\uD305\uD558\uAC70\uB098 SVG\uB85C \uB80C\uB354\uB9C1\uD569\uB2C8\uB2E4. Mermaid, PlantUML, Graphviz DOT \uB4F1 \uC9C1\uC811 \uC791\uC131\uD55C \uBB38\uBC95\uC774 \uC788\uC744 \uB54C \uC0AC\uC6A9\uD558\uC138\uC694. output_format=svg \uC9C0\uC815 \uC2DC Kroki API\uB97C \uD1B5\uD574 \uC2E4\uC81C SVG \uC774\uBBF8\uC9C0\uB85C \uBCC0\uD658\uD569\uB2C8\uB2E4. diagram_type: mermaid | plantuml | dot | graphviz | d2 | \uAE30\uD0C0",
     {
-      diagram_type: external_exports.string().describe(
-        "\uB2E4\uC774\uC5B4\uADF8\uB7A8 \uD0C0\uC785 (mermaid, plantuml, dot, d2 \uB4F1). \uB9C8\uD06C\uB2E4\uC6B4 \uCF54\uB4DC\uBE14\uB85D \uC5B8\uC5B4 \uD0DC\uADF8\uB85C \uC0AC\uC6A9\uB428"
-      ),
-      source: external_exports.string().describe("\uB80C\uB354\uB9C1\uD560 \uB2E4\uC774\uC5B4\uADF8\uB7A8 \uC6D0\uBCF8 \uBB38\uBC95")
+      diagram_type: external_exports.string().describe("\uB2E4\uC774\uC5B4\uADF8\uB7A8 \uD0C0\uC785 (mermaid, plantuml, dot, graphviz \uB4F1)"),
+      source: external_exports.string().describe("\uB80C\uB354\uB9C1\uD560 \uB2E4\uC774\uC5B4\uADF8\uB7A8 \uC6D0\uBCF8 \uBB38\uBC95"),
+      output_format: external_exports.enum(["markdown", "svg"]).optional().default("markdown").describe("\uCD9C\uB825 \uD3EC\uB9F7. markdown=\uCF54\uB4DC\uBE14\uB85D(\uAE30\uBCF8), svg=\uB80C\uB354\uB9C1\uB41C SVG")
     },
-    async ({ diagram_type, source }) => {
+    async ({ diagram_type, source, output_format = "markdown" }) => {
+      if (output_format === "svg") {
+        const krokiType = KROKI_TYPES[diagram_type.toLowerCase()];
+        if (!krokiType) {
+          return {
+            content: [{
+              type: "text",
+              text: `SVG \uB80C\uB354\uB9C1 \uBD88\uAC00: '${diagram_type}'\uC740 Kroki \uBBF8\uC9C0\uC6D0 \uD0C0\uC785\uC785\uB2C8\uB2E4. \uC9C0\uC6D0 \uD0C0\uC785: mermaid, plantuml, dot, graphviz`
+            }]
+          };
+        }
+        const svg = await renderViaKroki(krokiType, source.trim());
+        return { content: [{ type: "text", text: svg }] };
+      }
       const formatted = `\`\`\`${diagram_type}
 ${source.trim()}
 \`\`\``;
@@ -21179,6 +21230,11 @@ function wrap(syntax) {
 ${syntax.trim()}
 \`\`\``;
 }
+async function toOutput(syntax, format) {
+  if (format === "svg") return renderViaKroki("mermaid", syntax);
+  return wrap(syntax);
+}
+var OutputFormat = external_exports.enum(["markdown", "svg"]).optional().default("markdown").describe("\uCD9C\uB825 \uD3EC\uB9F7. markdown=\uB9C8\uD06C\uB2E4\uC6B4 \uCF54\uB4DC\uBE14\uB85D(\uAE30\uBCF8), svg=\uB80C\uB354\uB9C1\uB41C SVG (HTML/PDF \uC0BD\uC785\uC6A9)");
 function escapeLabel(label) {
   return label.replace(/"/g, "&quot;").replace(/[[\]{}()]/g, (c) => `&#${c.charCodeAt(0)};`);
 }
@@ -21327,9 +21383,10 @@ function registerMermaidTools(server2) {
       nodes: external_exports.array(FlowNode).describe("\uB178\uB4DC \uBAA9\uB85D"),
       edges: external_exports.array(FlowEdge).describe("\uC5E3\uC9C0 \uBAA9\uB85D"),
       direction: external_exports.enum(["TD", "LR", "BT", "RL"]).optional().describe("\uD750\uB984 \uBC29\uD5A5. TD=\uC704\u2192\uC544\uB798(\uAE30\uBCF8), LR=\uC67C\u2192\uC624\uB978, BT=\uC544\uB798\u2192\uC704, RL=\uC624\uB978\u2192\uC67C"),
-      title: external_exports.string().optional().describe("\uB2E4\uC774\uC5B4\uADF8\uB7A8 \uC81C\uBAA9")
+      title: external_exports.string().optional().describe("\uB2E4\uC774\uC5B4\uADF8\uB7A8 \uC81C\uBAA9"),
+      output_format: OutputFormat
     },
-    async ({ nodes, edges, direction = "TD", title }) => {
+    async ({ nodes, edges, direction = "TD", title, output_format = "markdown" }) => {
       const lines = [`flowchart ${direction}`];
       if (title) lines.push(`  ---
   title: ${title}
@@ -21340,7 +21397,7 @@ function registerMermaidTools(server2) {
       for (const e of edges) {
         lines.push(`  ${e.from} ${edgeArrow(e.label, e.style)} ${e.to}`);
       }
-      return { content: [{ type: "text", text: wrap(lines.join("\n")) }] };
+      return { content: [{ type: "text", text: await toOutput(lines.join("\n"), output_format) }] };
     }
   );
   server2.tool(
@@ -21349,16 +21406,17 @@ function registerMermaidTools(server2) {
     {
       participants: external_exports.array(external_exports.string()).describe("\uCC38\uC5EC\uC790 \uC774\uB984 \uBAA9\uB85D (\uD45C\uC2DC \uC21C\uC11C\uB300\uB85C)"),
       messages: external_exports.array(SeqMessage).describe("\uBA54\uC2DC\uC9C0 \uBAA9\uB85D"),
-      title: external_exports.string().optional().describe("\uB2E4\uC774\uC5B4\uADF8\uB7A8 \uC81C\uBAA9")
+      title: external_exports.string().optional().describe("\uB2E4\uC774\uC5B4\uADF8\uB7A8 \uC81C\uBAA9"),
+      output_format: OutputFormat
     },
-    async ({ participants, messages, title }) => {
+    async ({ participants, messages, title, output_format = "markdown" }) => {
       const lines = ["sequenceDiagram"];
       if (title) lines.push(`  title ${title}`);
       for (const p of participants) lines.push(`  participant ${p}`);
       for (const m of messages) {
         lines.push(`  ${m.from}${msgArrow(m.type)}${m.to}: ${m.text}`);
       }
-      return { content: [{ type: "text", text: wrap(lines.join("\n")) }] };
+      return { content: [{ type: "text", text: await toOutput(lines.join("\n"), output_format) }] };
     }
   );
   server2.tool(
@@ -21366,9 +21424,10 @@ function registerMermaidTools(server2) {
     "Mermaid \uD074\uB798\uC2A4 \uB2E4\uC774\uC5B4\uADF8\uB7A8\uC744 \uC0DD\uC131\uD569\uB2C8\uB2E4. OOP \uC124\uACC4, \uB3C4\uBA54\uC778 \uBAA8\uB378 \uD45C\uD604\uC5D0 \uC801\uD569\uD569\uB2C8\uB2E4. \uC18D\uC131/\uBA54\uC11C\uB4DC \uAC00\uC2DC\uC131: +(public), -(private), #(protected), ~(package). \uAD00\uACC4 \uD0C0\uC785: inheritance(\uC0C1\uC18D), realization(\uAD6C\uD604), composition(\uD569\uC131), aggregation(\uC9D1\uD569), association(\uC5F0\uAD00), dependency(\uC758\uC874).",
     {
       classes: external_exports.array(ClassDef).describe("\uD074\uB798\uC2A4 \uBAA9\uB85D"),
-      relationships: external_exports.array(ClassRel).describe("\uAD00\uACC4 \uBAA9\uB85D")
+      relationships: external_exports.array(ClassRel).describe("\uAD00\uACC4 \uBAA9\uB85D"),
+      output_format: OutputFormat
     },
-    async ({ classes, relationships }) => {
+    async ({ classes, relationships, output_format = "markdown" }) => {
       const lines = ["classDiagram"];
       for (const c of classes) {
         lines.push(`  class ${c.name} {`);
@@ -21381,7 +21440,7 @@ function registerMermaidTools(server2) {
         const lbl = r.label ? ` : ${r.label}` : "";
         lines.push(`  ${r.from} ${arrow} ${r.to}${lbl}`);
       }
-      return { content: [{ type: "text", text: wrap(lines.join("\n")) }] };
+      return { content: [{ type: "text", text: await toOutput(lines.join("\n"), output_format) }] };
     }
   );
   server2.tool(
@@ -21389,9 +21448,10 @@ function registerMermaidTools(server2) {
     "Mermaid ER \uB2E4\uC774\uC5B4\uADF8\uB7A8\uC744 \uC0DD\uC131\uD569\uB2C8\uB2E4. \uB370\uC774\uD130\uBCA0\uC774\uC2A4 \uC2A4\uD0A4\uB9C8, \uC5D4\uD2F0\uD2F0 \uAD00\uACC4 \uC124\uACC4\uC5D0 \uC801\uD569\uD569\uB2C8\uB2E4. \uCE74\uB514\uB110\uB9AC\uD2F0: ||=\uC815\uD655\uD7881, o|=0\uB610\uB2941, |{=1\uC774\uC0C1, o{=0\uC774\uC0C1. \uCEEC\uB7FC \uD0A4: PK(\uAE30\uBCF8\uD0A4), FK(\uC678\uB798\uD0A4), UK(\uC720\uB2C8\uD06C).",
     {
       entities: external_exports.array(EREntity).describe("\uC5D4\uD2F0\uD2F0 \uBAA9\uB85D"),
-      relationships: external_exports.array(ERRel).describe("\uAD00\uACC4 \uBAA9\uB85D")
+      relationships: external_exports.array(ERRel).describe("\uAD00\uACC4 \uBAA9\uB85D"),
+      output_format: OutputFormat
     },
-    async ({ entities, relationships }) => {
+    async ({ entities, relationships, output_format = "markdown" }) => {
       const lines = ["erDiagram"];
       for (const r of relationships) {
         const fc = r.from_card ?? "||";
@@ -21407,7 +21467,7 @@ function registerMermaidTools(server2) {
         }
         lines.push("  }");
       }
-      return { content: [{ type: "text", text: wrap(lines.join("\n")) }] };
+      return { content: [{ type: "text", text: await toOutput(lines.join("\n"), output_format) }] };
     }
   );
   server2.tool(
@@ -21421,9 +21481,10 @@ function registerMermaidTools(server2) {
           tasks: external_exports.array(GanttTask).describe("\uD0DC\uC2A4\uD06C \uBAA9\uB85D")
         })
       ).describe("\uC139\uC158 \uBAA9\uB85D"),
-      date_format: external_exports.string().optional().describe("\uB0A0\uC9DC \uD615\uC2DD. \uAE30\uBCF8\uAC12 YYYY-MM-DD")
+      date_format: external_exports.string().optional().describe("\uB0A0\uC9DC \uD615\uC2DD. \uAE30\uBCF8\uAC12 YYYY-MM-DD"),
+      output_format: OutputFormat
     },
-    async ({ title, sections, date_format = "YYYY-MM-DD" }) => {
+    async ({ title, sections, date_format = "YYYY-MM-DD", output_format = "markdown" }) => {
       const lines = ["gantt", `  title ${title}`, `  dateFormat ${date_format}`];
       for (const sec of sections) {
         lines.push(`  section ${sec.name}`);
@@ -21435,7 +21496,7 @@ function registerMermaidTools(server2) {
           lines.push(`    ${t.name} :${parts.join(", ")}`);
         }
       }
-      return { content: [{ type: "text", text: wrap(lines.join("\n")) }] };
+      return { content: [{ type: "text", text: await toOutput(lines.join("\n"), output_format) }] };
     }
   );
   server2.tool(
@@ -21448,14 +21509,15 @@ function registerMermaidTools(server2) {
           label: external_exports.string().describe("\uC2AC\uB77C\uC774\uC2A4 \uB808\uC774\uBE14"),
           value: external_exports.number().describe("\uC218\uCE58\uAC12 (\uBE44\uC728 \uC790\uB3D9 \uACC4\uC0B0\uB428)")
         })
-      ).describe("\uC2AC\uB77C\uC774\uC2A4 \uBAA9\uB85D")
+      ).describe("\uC2AC\uB77C\uC774\uC2A4 \uBAA9\uB85D"),
+      output_format: OutputFormat
     },
-    async ({ title, slices }) => {
+    async ({ title, slices, output_format = "markdown" }) => {
       const lines = [`pie title ${title}`];
       for (const s of slices) {
         lines.push(`  "${s.label}" : ${s.value}`);
       }
-      return { content: [{ type: "text", text: wrap(lines.join("\n")) }] };
+      return { content: [{ type: "text", text: await toOutput(lines.join("\n"), output_format) }] };
     }
   );
   server2.tool(
@@ -21464,15 +21526,16 @@ function registerMermaidTools(server2) {
     {
       root: external_exports.string().describe("\uB8E8\uD2B8 \uB178\uB4DC \uD14D\uC2A4\uD2B8"),
       root_shape: external_exports.enum(["default", "circle", "square", "rounded", "bang", "cloud"]).optional().describe("\uB8E8\uD2B8 \uB178\uB4DC \uBAA8\uC591. \uAE30\uBCF8\uAC12 circle"),
-      children: external_exports.array(MindmapNodeSchema).describe("1\uB2E8\uACC4 \uD558\uC704 \uB178\uB4DC \uBAA9\uB85D (\uC7AC\uADC0 \uC911\uCCA9 \uAC00\uB2A5)")
+      children: external_exports.array(MindmapNodeSchema).describe("1\uB2E8\uACC4 \uD558\uC704 \uB178\uB4DC \uBAA9\uB85D (\uC7AC\uADC0 \uC911\uCCA9 \uAC00\uB2A5)"),
+      output_format: OutputFormat
     },
-    async ({ root, root_shape = "circle", children }) => {
+    async ({ root, root_shape = "circle", children, output_format = "markdown" }) => {
       const rootNode = nodeForMindmap(root, root_shape);
       const lines = ["mindmap", `  ${rootNode}`];
       if (children.length > 0) {
         lines.push(mindmapLines(children, 2));
       }
-      return { content: [{ type: "text", text: wrap(lines.join("\n")) }] };
+      return { content: [{ type: "text", text: await toOutput(lines.join("\n"), output_format) }] };
     }
   );
 }
@@ -21499,6 +21562,11 @@ function wrap2(syntax) {
 ${syntax.trim()}
 \`\`\``;
 }
+async function toOutput2(syntax, format) {
+  if (format === "svg") return renderViaKroki("plantuml", syntax);
+  return wrap2(syntax);
+}
+var OutputFormat2 = external_exports.enum(["markdown", "svg"]).optional().default("markdown").describe("\uCD9C\uB825 \uD3EC\uB9F7. markdown=\uB9C8\uD06C\uB2E4\uC6B4 \uCF54\uB4DC\uBE14\uB85D(\uAE30\uBCF8), svg=\uB80C\uB354\uB9C1\uB41C SVG (HTML/PDF \uC0BD\uC785\uC6A9)");
 function msgArrow2(type) {
   switch (type) {
     case "return":
@@ -21580,9 +21648,10 @@ function registerPlantUMLTools(server2) {
     {
       participants: external_exports.array(Participant).describe("\uCC38\uC5EC\uC790 \uBAA9\uB85D"),
       messages: external_exports.array(SeqMessage2).describe("\uBA54\uC2DC\uC9C0 \uBAA9\uB85D"),
-      title: external_exports.string().optional().describe("\uB2E4\uC774\uC5B4\uADF8\uB7A8 \uC81C\uBAA9")
+      title: external_exports.string().optional().describe("\uB2E4\uC774\uC5B4\uADF8\uB7A8 \uC81C\uBAA9"),
+      output_format: OutputFormat2
     },
-    async ({ participants, messages, title }) => {
+    async ({ participants, messages, title, output_format = "markdown" }) => {
       const lines = ["@startuml"];
       if (title) lines.push(`title ${title}`);
       for (const p of participants) {
@@ -21596,7 +21665,7 @@ function registerPlantUMLTools(server2) {
         lines.push(`${m.from} ${msgArrow2(m.type)} ${m.to} : ${m.text}`);
       }
       lines.push("@enduml");
-      return { content: [{ type: "text", text: wrap2(lines.join("\n")) }] };
+      return { content: [{ type: "text", text: await toOutput2(lines.join("\n"), output_format) }] };
     }
   );
   server2.tool(
@@ -21605,9 +21674,10 @@ function registerPlantUMLTools(server2) {
     {
       classes: external_exports.array(ClassDef2).describe("\uD074\uB798\uC2A4 \uBAA9\uB85D"),
       relationships: external_exports.array(ClassRel2).describe("\uAD00\uACC4 \uBAA9\uB85D"),
-      title: external_exports.string().optional().describe("\uB2E4\uC774\uC5B4\uADF8\uB7A8 \uC81C\uBAA9")
+      title: external_exports.string().optional().describe("\uB2E4\uC774\uC5B4\uADF8\uB7A8 \uC81C\uBAA9"),
+      output_format: OutputFormat2
     },
-    async ({ classes, relationships, title }) => {
+    async ({ classes, relationships, title, output_format = "markdown" }) => {
       const lines = ["@startuml"];
       if (title) lines.push(`title ${title}`);
       for (const c of classes) {
@@ -21625,7 +21695,7 @@ function registerPlantUMLTools(server2) {
         lines.push(`${r.from}${fl} ${arrow}${tl} ${r.to}${lbl}`);
       }
       lines.push("@enduml");
-      return { content: [{ type: "text", text: wrap2(lines.join("\n")) }] };
+      return { content: [{ type: "text", text: await toOutput2(lines.join("\n"), output_format) }] };
     }
   );
   server2.tool(
@@ -21634,9 +21704,10 @@ function registerPlantUMLTools(server2) {
     {
       components: external_exports.array(Component).describe("\uCEF4\uD3EC\uB10C\uD2B8 \uBAA9\uB85D"),
       connections: external_exports.array(Connection).describe("\uC5F0\uACB0 \uBAA9\uB85D"),
-      title: external_exports.string().optional().describe("\uB2E4\uC774\uC5B4\uADF8\uB7A8 \uC81C\uBAA9")
+      title: external_exports.string().optional().describe("\uB2E4\uC774\uC5B4\uADF8\uB7A8 \uC81C\uBAA9"),
+      output_format: OutputFormat2
     },
-    async ({ components, connections, title }) => {
+    async ({ components, connections, title, output_format = "markdown" }) => {
       const lines = ["@startuml"];
       if (title) lines.push(`title ${title}`);
       for (const c of components) {
@@ -21669,7 +21740,7 @@ function registerPlantUMLTools(server2) {
         lines.push(`${conn.from} ${arrow} ${conn.to}${lbl}`);
       }
       lines.push("@enduml");
-      return { content: [{ type: "text", text: wrap2(lines.join("\n")) }] };
+      return { content: [{ type: "text", text: await toOutput2(lines.join("\n"), output_format) }] };
     }
   );
   server2.tool(
@@ -21678,9 +21749,10 @@ function registerPlantUMLTools(server2) {
     {
       states: external_exports.array(State).describe("\uC0C1\uD0DC \uBAA9\uB85D"),
       transitions: external_exports.array(Transition).describe("\uC804\uC774 \uBAA9\uB85D"),
-      title: external_exports.string().optional().describe("\uB2E4\uC774\uC5B4\uADF8\uB7A8 \uC81C\uBAA9")
+      title: external_exports.string().optional().describe("\uB2E4\uC774\uC5B4\uADF8\uB7A8 \uC81C\uBAA9"),
+      output_format: OutputFormat2
     },
-    async ({ states, transitions, title }) => {
+    async ({ states, transitions, title, output_format = "markdown" }) => {
       const lines = ["@startuml"];
       if (title) lines.push(`title ${title}`);
       for (const s of states) {
@@ -21693,7 +21765,7 @@ function registerPlantUMLTools(server2) {
         lines.push(`${t.from} --> ${t.to}${lbl}`);
       }
       lines.push("@enduml");
-      return { content: [{ type: "text", text: wrap2(lines.join("\n")) }] };
+      return { content: [{ type: "text", text: await toOutput2(lines.join("\n"), output_format) }] };
     }
   );
 }
@@ -21704,6 +21776,11 @@ function wrap3(syntax) {
 ${syntax.trim()}
 \`\`\``;
 }
+async function toOutput3(syntax, format) {
+  if (format === "svg") return renderViaKroki("graphviz", syntax);
+  return wrap3(syntax);
+}
+var OutputFormat3 = external_exports.enum(["markdown", "svg"]).optional().default("markdown").describe("\uCD9C\uB825 \uD3EC\uB9F7. markdown=\uB9C8\uD06C\uB2E4\uC6B4 \uCF54\uB4DC\uBE14\uB85D(\uAE30\uBCF8), svg=\uB80C\uB354\uB9C1\uB41C SVG (HTML/PDF \uC0BD\uC785\uC6A9)");
 function formatAttrs(attrs) {
   const pairs = Object.entries(attrs).map(([k, v]) => `${k}="${v}"`).join(" ");
   return pairs ? ` [${pairs}]` : "";
@@ -21770,11 +21847,12 @@ function registerGraphvizTools(server2) {
       nodes: external_exports.array(GvNode).describe("\uB178\uB4DC \uBAA9\uB85D"),
       edges: external_exports.array(GvEdge).describe("\uC5E3\uC9C0 \uBAA9\uB85D (\uBC29\uD5A5 \uC788\uC74C \u2192)"),
       graph_attrs: GraphAttrs,
-      title: external_exports.string().optional().describe("\uADF8\uB798\uD504 \uC81C\uBAA9")
+      title: external_exports.string().optional().describe("\uADF8\uB798\uD504 \uC81C\uBAA9"),
+      output_format: OutputFormat3
     },
-    async ({ nodes, edges, graph_attrs, title }) => {
+    async ({ nodes, edges, graph_attrs, title, output_format = "markdown" }) => {
       const dot = buildGraph("digraph", nodes, edges, graph_attrs, title);
-      return { content: [{ type: "text", text: wrap3(dot) }] };
+      return { content: [{ type: "text", text: await toOutput3(dot, output_format) }] };
     }
   );
   server2.tool(
@@ -21784,11 +21862,12 @@ function registerGraphvizTools(server2) {
       nodes: external_exports.array(GvNode).describe("\uB178\uB4DC \uBAA9\uB85D"),
       edges: external_exports.array(GvEdge).describe("\uC5E3\uC9C0 \uBAA9\uB85D (\uBC29\uD5A5 \uC5C6\uC74C --)"),
       graph_attrs: GraphAttrs,
-      title: external_exports.string().optional().describe("\uADF8\uB798\uD504 \uC81C\uBAA9")
+      title: external_exports.string().optional().describe("\uADF8\uB798\uD504 \uC81C\uBAA9"),
+      output_format: OutputFormat3
     },
-    async ({ nodes, edges, graph_attrs, title }) => {
+    async ({ nodes, edges, graph_attrs, title, output_format = "markdown" }) => {
       const dot = buildGraph("graph", nodes, edges, graph_attrs, title);
-      return { content: [{ type: "text", text: wrap3(dot) }] };
+      return { content: [{ type: "text", text: await toOutput3(dot, output_format) }] };
     }
   );
 }

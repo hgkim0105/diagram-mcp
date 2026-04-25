@@ -1,5 +1,13 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { renderViaKroki, getPngUrl, type KrokiDiagramType } from "../lib/kroki.js";
+
+const KROKI_TYPES: Record<string, KrokiDiagramType> = {
+  mermaid: "mermaid",
+  plantuml: "plantuml",
+  dot: "graphviz",
+  graphviz: "graphviz",
+};
 
 const SUPPORTED_TYPES = [
   {
@@ -122,18 +130,37 @@ export function registerUtilityTools(server: McpServer): void {
   // ─────────────────────────────────────────────
   server.tool(
     "render_diagram",
-    "이미 작성된 다이어그램 문법을 마크다운 코드블록으로 포매팅합니다. " +
+    "이미 작성된 다이어그램 문법을 포매팅하거나 SVG로 렌더링합니다. " +
       "Mermaid, PlantUML, Graphviz DOT 등 직접 작성한 문법이 있을 때 사용하세요. " +
-      "diagram_type: mermaid | plantuml | dot | d2 | 기타 언어 식별자",
+      "output_format=svg 지정 시 Kroki API를 통해 실제 SVG 이미지로 변환합니다. " +
+      "diagram_type: mermaid | plantuml | dot | graphviz | d2 | 기타",
     {
       diagram_type: z
         .string()
-        .describe(
-          "다이어그램 타입 (mermaid, plantuml, dot, d2 등). 마크다운 코드블록 언어 태그로 사용됨"
-        ),
+        .describe("다이어그램 타입 (mermaid, plantuml, dot, graphviz 등)"),
       source: z.string().describe("렌더링할 다이어그램 원본 문법"),
+      output_format: z
+        .enum(["markdown", "svg", "png_url"])
+        .optional()
+        .default("markdown")
+        .describe("출력 포맷. markdown=코드블록(기본), svg=SVG (HTML/PDF용), png_url=PNG URL (Slack/Discord용)"),
     },
-    async ({ diagram_type, source }) => {
+    async ({ diagram_type, source, output_format = "markdown" }) => {
+      if (output_format === "svg" || output_format === "png_url") {
+        const krokiType = KROKI_TYPES[diagram_type.toLowerCase()];
+        if (!krokiType) {
+          return {
+            content: [{
+              type: "text" as const,
+              text: `렌더링 불가: '${diagram_type}'은 Kroki 미지원 타입입니다. 지원 타입: mermaid, plantuml, dot, graphviz`,
+            }],
+          };
+        }
+        const text = output_format === "png_url"
+          ? getPngUrl(krokiType, source.trim())
+          : await renderViaKroki(krokiType, source.trim());
+        return { content: [{ type: "text" as const, text }] };
+      }
       const formatted = `\`\`\`${diagram_type}\n${source.trim()}\n\`\`\``;
       return { content: [{ type: "text" as const, text: formatted }] };
     }

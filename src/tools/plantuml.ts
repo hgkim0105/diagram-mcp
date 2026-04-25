@@ -1,9 +1,22 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { renderViaKroki, getPngUrl } from "../lib/kroki.js";
 
 function wrap(syntax: string): string {
   return `\`\`\`plantuml\n${syntax.trim()}\n\`\`\``;
 }
+
+async function toOutput(syntax: string, format: string): Promise<string> {
+  if (format === "svg") return renderViaKroki("plantuml", syntax);
+  if (format === "png_url") return getPngUrl("plantuml", syntax);
+  return wrap(syntax);
+}
+
+const OutputFormat = z
+  .enum(["markdown", "svg", "png_url"])
+  .optional()
+  .default("markdown")
+  .describe("출력 포맷. markdown=마크다운 코드블록(기본), svg=SVG (HTML/PDF용), png_url=PNG 이미지 URL (Slack/Discord용)");
 
 function msgArrow(type?: string): string {
   switch (type) {
@@ -107,15 +120,15 @@ export function registerPlantUMLTools(server: McpServer): void {
       participants: z.array(Participant).describe("참여자 목록"),
       messages: z.array(SeqMessage).describe("메시지 목록"),
       title: z.string().optional().describe("다이어그램 제목"),
+      output_format: OutputFormat,
     },
-    async ({ participants, messages, title }) => {
+    async ({ participants, messages, title, output_format = "markdown" }) => {
       const lines: string[] = ["@startuml"];
       if (title) lines.push(`title ${title}`);
 
       for (const p of participants) {
         const pType = p.type ?? "participant";
         const alias = p.alias ? ` as ${p.alias}` : "";
-        // 이름에 공백이 있으면 따옴표로 감싸기
         const nameStr = p.name.includes(" ") ? `"${p.name}"` : p.name;
         lines.push(`${pType} ${nameStr}${alias}`);
       }
@@ -126,7 +139,7 @@ export function registerPlantUMLTools(server: McpServer): void {
       }
 
       lines.push("@enduml");
-      return { content: [{ type: "text" as const, text: wrap(lines.join("\n")) }] };
+      return { content: [{ type: "text" as const, text: await toOutput(lines.join("\n"), output_format) }] };
     }
   );
 
@@ -142,8 +155,9 @@ export function registerPlantUMLTools(server: McpServer): void {
       classes: z.array(ClassDef).describe("클래스 목록"),
       relationships: z.array(ClassRel).describe("관계 목록"),
       title: z.string().optional().describe("다이어그램 제목"),
+      output_format: OutputFormat,
     },
-    async ({ classes, relationships, title }) => {
+    async ({ classes, relationships, title, output_format = "markdown" }) => {
       const lines: string[] = ["@startuml"];
       if (title) lines.push(`title ${title}`);
 
@@ -160,12 +174,11 @@ export function registerPlantUMLTools(server: McpServer): void {
         const fl = r.from_label ? ` "${r.from_label}"` : "";
         const tl = r.to_label ? ` "${r.to_label}"` : "";
         const lbl = r.label ? ` : ${r.label}` : "";
-        // PlantUML 관계: FROM "fl" arrow "tl" TO : label
         lines.push(`${r.from}${fl} ${arrow}${tl} ${r.to}${lbl}`);
       }
 
       lines.push("@enduml");
-      return { content: [{ type: "text" as const, text: wrap(lines.join("\n")) }] };
+      return { content: [{ type: "text" as const, text: await toOutput(lines.join("\n"), output_format) }] };
     }
   );
 
@@ -179,8 +192,9 @@ export function registerPlantUMLTools(server: McpServer): void {
       components: z.array(Component).describe("컴포넌트 목록"),
       connections: z.array(Connection).describe("연결 목록"),
       title: z.string().optional().describe("다이어그램 제목"),
+      output_format: OutputFormat,
     },
-    async ({ components, connections, title }) => {
+    async ({ components, connections, title, output_format = "markdown" }) => {
       const lines: string[] = ["@startuml"];
       if (title) lines.push(`title ${title}`);
 
@@ -217,7 +231,7 @@ export function registerPlantUMLTools(server: McpServer): void {
       }
 
       lines.push("@enduml");
-      return { content: [{ type: "text" as const, text: wrap(lines.join("\n")) }] };
+      return { content: [{ type: "text" as const, text: await toOutput(lines.join("\n"), output_format) }] };
     }
   );
 
@@ -231,8 +245,9 @@ export function registerPlantUMLTools(server: McpServer): void {
       states: z.array(State).describe("상태 목록"),
       transitions: z.array(Transition).describe("전이 목록"),
       title: z.string().optional().describe("다이어그램 제목"),
+      output_format: OutputFormat,
     },
-    async ({ states, transitions, title }) => {
+    async ({ states, transitions, title, output_format = "markdown" }) => {
       const lines: string[] = ["@startuml"];
       if (title) lines.push(`title ${title}`);
 
@@ -248,7 +263,7 @@ export function registerPlantUMLTools(server: McpServer): void {
       }
 
       lines.push("@enduml");
-      return { content: [{ type: "text" as const, text: wrap(lines.join("\n")) }] };
+      return { content: [{ type: "text" as const, text: await toOutput(lines.join("\n"), output_format) }] };
     }
   );
 }

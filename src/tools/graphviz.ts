@@ -1,9 +1,22 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { renderViaKroki, getPngUrl } from "../lib/kroki.js";
 
 function wrap(syntax: string): string {
   return `\`\`\`dot\n${syntax.trim()}\n\`\`\``;
 }
+
+async function toOutput(syntax: string, format: string): Promise<string> {
+  if (format === "svg") return renderViaKroki("graphviz", syntax);
+  if (format === "png_url") return getPngUrl("graphviz", syntax);
+  return wrap(syntax);
+}
+
+const OutputFormat = z
+  .enum(["markdown", "svg", "png_url"])
+  .optional()
+  .default("markdown")
+  .describe("출력 포맷. markdown=마크다운 코드블록(기본), svg=SVG (HTML/PDF용), png_url=PNG 이미지 URL (Slack/Discord용)");
 
 function formatAttrs(attrs: Record<string, string>): string {
   const pairs = Object.entries(attrs)
@@ -110,10 +123,11 @@ export function registerGraphvizTools(server: McpServer): void {
       edges: z.array(GvEdge).describe("엣지 목록 (방향 있음 →)"),
       graph_attrs: GraphAttrs,
       title: z.string().optional().describe("그래프 제목"),
+      output_format: OutputFormat,
     },
-    async ({ nodes, edges, graph_attrs, title }) => {
+    async ({ nodes, edges, graph_attrs, title, output_format = "markdown" }) => {
       const dot = buildGraph("digraph", nodes, edges, graph_attrs, title);
-      return { content: [{ type: "text" as const, text: wrap(dot) }] };
+      return { content: [{ type: "text" as const, text: await toOutput(dot, output_format) }] };
     }
   );
 
@@ -129,10 +143,11 @@ export function registerGraphvizTools(server: McpServer): void {
       edges: z.array(GvEdge).describe("엣지 목록 (방향 없음 --)"),
       graph_attrs: GraphAttrs,
       title: z.string().optional().describe("그래프 제목"),
+      output_format: OutputFormat,
     },
-    async ({ nodes, edges, graph_attrs, title }) => {
+    async ({ nodes, edges, graph_attrs, title, output_format = "markdown" }) => {
       const dot = buildGraph("graph", nodes, edges, graph_attrs, title);
-      return { content: [{ type: "text" as const, text: wrap(dot) }] };
+      return { content: [{ type: "text" as const, text: await toOutput(dot, output_format) }] };
     }
   );
 }
